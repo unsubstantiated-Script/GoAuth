@@ -7,11 +7,17 @@
 <body>
 <h1>{{.Name}}</h1>
 <img src="{{.Logo}}" alt="Stock logo image" width="100"/>
-<p>Requesting access to {{.Website}}</p>
+<p>Requesting access to <b>{{.Website}}</b> with the following scopes:</p>
+<ul>
+    {{ range $scope := .Scopes}}
+    <li>{{$scope}}</li>
+    {{end}}
+</ul>
 <form action="confirm_auth">
     <button type="submit" name="authorize" value="true">Authorize</button>
     <button type="submit" name="authorize" value="false">Deny</button>
     <input type="hidden" name="client_id" value="{{.Name}}">
+    <input type="hidden" name="state" value="{{.State}}">
 </form>
 </body>
 </html>

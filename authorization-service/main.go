@@ -35,6 +35,12 @@ type AuthRequest struct {
 	State        string
 }
 
+type ConfirmAuthRequest struct {
+	Authorize bool   `json:"authorize" query:"authorize"`
+	ClientID  string `json:"client_id" query:"client_id"`
+	State     string
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -59,7 +65,7 @@ func main() {
 	// Insert dummy client OnConflict allows an update when ID conflicts or matches again.
 	db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "website", "logo", "redirect_uri"}),
+		DoUpdates: clause.AssignmentColumns([]string{"name", "website", "redirect_uri", "logo"}),
 	}).Create(&Client{
 		ID:          "1",
 		Name:        "fiber",
@@ -85,28 +91,32 @@ func main() {
 	api.Get("/auth", func(c *fiber.Ctx) error {
 		authRequest := new(AuthRequest)
 		if err := c.QueryParser(authRequest); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+			return c.Status(400).JSON(fiber.Map{"error": "invalid auth request"})
 		}
 
 		if authRequest.ResponseType != "code" {
-			return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+			return c.Status(400).JSON(fiber.Map{"error": "invalid code request"})
 		}
 
-		if authRequest.ClientID != os.Getenv("CLIENT_ID") {
-			return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+		if authRequest.ClientID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid_client_id"})
 		}
 
 		if !strings.Contains(authRequest.RedirectURI, "https") {
-			return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+			return c.Status(400).JSON(fiber.Map{"error": "invalid_redirect_uri"})
 		}
 
 		if authRequest.Scope == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+			return c.Status(400).JSON(fiber.Map{"error": "invalid scope request"})
+		}
+
+		if authRequest.State == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid state request"})
 		}
 
 		// Check for client
 		client := new(Client)
-		if err := db.Where("name = ?", authRequest.ClientID).First(client).Error; err != nil {
+		if err := db.Where("name = ?", authRequest.ClientID).First(&client).Error; err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "invalid client"})
 		}
 
@@ -117,7 +127,7 @@ func main() {
 		}
 
 		c.Cookie(&fiber.Cookie{
-			Name:     "auth_request_code",
+			Name:     "temp_auth_request_code",
 			Value:    code,
 			Secure:   true,
 			Expires:  time.Now().Add(1 * time.Minute),
@@ -128,8 +138,33 @@ func main() {
 			"Logo":    client.Logo,
 			"Name":    client.Name,
 			"Website": client.Website,
+			"State":   authRequest.State,
+			"Scopes":  strings.Split(authRequest.Scope, " "),
 		})
 
+	})
+
+	api.Get("/confirm_auth", func(c *fiber.Ctx) error {
+		tempCode := c.Cookies("temp_auth_request_code")
+		if tempCode == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid code request"})
+		}
+
+		confirmAuthRequest := new(ConfirmAuthRequest)
+		if err = c.QueryParser(confirmAuthRequest); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid confirm auth request"})
+		}
+
+		client := new(Client)
+		if err := db.Where("name = ?", confirmAuthRequest.ClientID).First(&client).Error; err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid client"})
+		}
+
+		if !confirmAuthRequest.Authorize {
+			return c.Redirect(client.RedirectURI + "?error=access_denied" + "&state=" + confirmAuthRequest.State)
+		}
+
+		return c.Redirect(client.RedirectURI + "?code=" + tempCode + "&state=" + confirmAuthRequest.State)
 	})
 
 	port := os.Getenv("PORT")
